@@ -198,7 +198,7 @@ int main (void)
 	  else if((XGpio_DiscreteRead(&SWTInst, 1) == 0b0100) && (XGpio_DiscreteRead(&BTNInst, 1) == 0))
 	  {
 		  // Slide switch 2 (SW2) ON changes the project operation from BTN0 and BTN1
-		  // to BTN2 and BTN3. That is, if SW2 is ON, BTN2 increments and BTN3 decrements
+		  // to BTN2 and BTN3. That is, if SW3 is ON, BTN2 increments and BTN3 decrements
 		  // the current number of times the AXI Timer will interrupt the process with
 		  // the limits and operation of the LEDs as described in Tasks 3 and 4. If SW2
 		  // is OFF, the process reverts so that BTN1 increments and BTN2 decrements

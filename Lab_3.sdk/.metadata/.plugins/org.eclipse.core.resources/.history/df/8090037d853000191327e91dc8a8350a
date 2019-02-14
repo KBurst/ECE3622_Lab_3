@@ -154,7 +154,7 @@ int main (void)
 		  XGpio_InterruptDisable(&BTNInst, BTN_INT);
 	  else if(XGpio_DiscreteRead(&SWTInst, 1) == 0)
 		  XGpio_InterruptEnable(&BTNInst, BTN_INT);
-	  else if((XGpio_DiscreteRead(&SWTInst, 1) == 0b0001) && (XGpio_DiscreteRead(&BTNInst, 1) == 0b0001))
+	  else if((XGpio_DiscreteRead(&SWTInst, 1) == 0) && (XGpio_DiscreteRead(&BTNInst, 1) == 0))
 	  {
 		  // Push button 0 (BTN0) increments the current number of times the AXI Timer
 		  // will interrupt the process before it increments the count autonomously
@@ -169,13 +169,15 @@ int main (void)
 		  else
 			  tmr_limit++;
 
-		  XTmrCtr_Stop(&TMRInst, 0);
-		  XGpio_InterruptEnable(&BTNInst, BTN_INT);
-		  XGpio_DiscreteWrite(&LEDInst, 1, tmr_limit);
-		  for(int i = 0; i < LED_DELAY * 20; i++);
-		  XTmrCtr_Start(&TMRInst, 0);
+		  if(XGpio_DiscreteRead(&SWTInst, 1) == 0)
+		  {
+			  XGpio_InterruptEnable(&BTNInst, BTN_INT);
+			  XGpio_DiscreteWrite(&LEDInst, 1, tmr_limit);
+			  for(int i = 0; i < LED_DELAY * 20; i++);
+		  }
+
 	  }
-	  else if((XGpio_DiscreteRead(&SWTInst, 1) == 0b0010) && (XGpio_DiscreteRead(&BTNInst, 1) == 0b0010))
+	  else if((XGpio_DiscreteRead(&SWTInst, 1) == 0) && (XGpio_DiscreteRead(&BTNInst, 1) == 0b0010))
 	  {
 		  // Push button 1 (BTN1) decrements the current number of times the AXI
 		  // Timer will interrupt the process before it increments the count
@@ -183,22 +185,11 @@ int main (void)
 		  // of 1 interrupt. Slide switch 1 (SW1) must be ON for BTN1 to be effective.
 		  // The current decremented number of times are to be displayed in the LEDs
 		  // for 2 seconds. The LEDs then return to the displaying the current count.
-		  XGpio_InterruptDisable(&BTNInst, BTN_INT);
-		  if(tmr_limit == 1)
-			  tmr_limit = 3;
-		  else
-			  tmr_limit--;
-
-		  XTmrCtr_Stop(&TMRInst, 0);
-		  XGpio_InterruptEnable(&BTNInst, BTN_INT);
-		  XGpio_DiscreteWrite(&LEDInst, 1, tmr_limit);
-		  for(int i = 0; i < LED_DELAY * 20; i++);
-		  XTmrCtr_Start(&TMRInst, 0);
 	  }
 	  else if((XGpio_DiscreteRead(&SWTInst, 1) == 0b0100) && (XGpio_DiscreteRead(&BTNInst, 1) == 0))
 	  {
 		  // Slide switch 2 (SW2) ON changes the project operation from BTN0 and BTN1
-		  // to BTN2 and BTN3. That is, if SW2 is ON, BTN2 increments and BTN3 decrements
+		  // to BTN2 and BTN3. That is, if SW3 is ON, BTN2 increments and BTN3 decrements
 		  // the current number of times the AXI Timer will interrupt the process with
 		  // the limits and operation of the LEDs as described in Tasks 3 and 4. If SW2
 		  // is OFF, the process reverts so that BTN1 increments and BTN2 decrements
