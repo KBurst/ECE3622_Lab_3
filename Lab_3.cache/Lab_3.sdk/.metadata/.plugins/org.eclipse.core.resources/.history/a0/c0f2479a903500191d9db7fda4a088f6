@@ -1,0 +1,304 @@
+/*
+ * interrupt_counter_tut_2B.c
+ *
+ *  Created on: 	Unknown
+ *      Author: 	Ross Elliot
+ *     Version:		1.1
+ */
+
+/********************************************************************************************
+
+* VERSION HISTORY
+********************************************************************************************
+* 	v1.1 - 01/05/2015
+* 		Updated for Zybo ~ DN
+*
+*	v1.0 - Unknown
+*		First version created.
+*******************************************************************************************/
+
+#include "xparameters.h"
+#include "xgpio.h"
+#include "xtmrctr.h"
+#include "xscugic.h"
+#include "xil_exception.h"
+#include "xil_printf.h"
+
+// Parameter definitions
+#define INTC_DEVICE_ID 		XPAR_PS7_SCUGIC_0_DEVICE_ID
+#define TMR_DEVICE_ID		XPAR_TMRCTR_0_DEVICE_ID
+#define BTNS_DEVICE_ID		XPAR_AXI_GPIO_0_DEVICE_ID
+#define LEDS_DEVICE_ID		XPAR_AXI_GPIO_1_DEVICE_ID
+#define SWTS_DEVICE_ID		XPAR_AXI_GPIO_2_DEVICE_ID
+#define INTC_GPIO_INTERRUPT_ID XPAR_FABRIC_AXI_GPIO_0_IP2INTC_IRPT_INTR
+#define INTC_TMR_INTERRUPT_ID XPAR_FABRIC_AXI_TIMER_0_INTERRUPT_INTR
+
+#define BTN_INT 			XGPIO_IR_CH1_MASK
+#define TMR_LOAD			0xF8000000
+
+#define LED_DELAY 10000000
+
+XGpio LEDInst, BTNInst, SWTInst;
+XScuGic INTCInst;
+XTmrCtr TMRInst;
+static int led_data;
+static int btn_value;
+static int tmr_count;
+static int tmr_limit = 3;
+
+//----------------------------------------------------
+// PROTOTYPE FUNCTIONS
+//----------------------------------------------------
+static void BTN_Intr_Handler(void *baseaddr_p);
+static void TMR_Intr_Handler(void *baseaddr_p);
+static int InterruptSystemSetup(XScuGic *XScuGicInstancePtr);
+static int IntcInitFunction(u16 DeviceId, XTmrCtr *TmrInstancePtr, XGpio *GpioInstancePtr);
+
+//----------------------------------------------------
+// INTERRUPT HANDLER FUNCTIONS
+// - called by the timer, button interrupt, performs
+// - LED flashing
+//----------------------------------------------------
+
+
+void BTN_Intr_Handler(void *InstancePtr)
+{
+	// Disable GPIO interrupts
+	XGpio_InterruptDisable(&BTNInst, BTN_INT);
+	// Ignore additional button presses
+	if ((XGpio_InterruptGetStatus(&BTNInst) & BTN_INT) !=
+			BTN_INT) {
+			return;
+		}
+	btn_value = XGpio_DiscreteRead(&BTNInst, 1);
+	// Increment counter based on button value
+	// Reset if centre button pressed
+	led_data = led_data + btn_value;
+
+    XGpio_DiscreteWrite(&LEDInst, 1, led_data);
+    (void)XGpio_InterruptClear(&BTNInst, BTN_INT);
+    // Enable GPIO interrupts
+    XGpio_InterruptEnable(&BTNInst, BTN_INT);
+}
+
+void TMR_Intr_Handler(void *data)
+{
+	if (XTmrCtr_IsExpired(&TMRInst,0)){
+		// Once timer has expired 3 times, stop, increment counter
+		// reset timer and start running again
+		if(tmr_count == tmr_limit){
+			XTmrCtr_Stop(&TMRInst,0);
+			tmr_count = 0;
+			led_data++;
+			XGpio_DiscreteWrite(&LEDInst, 1, led_data);
+		}
+		else tmr_count++;
+	}
+	XTmrCtr_Reset(&TMRInst,0);
+	XTmrCtr_Start(&TMRInst,0);
+}
+
+
+
+//----------------------------------------------------
+// MAIN FUNCTION
+//----------------------------------------------------
+int main (void)
+{
+  int status;
+  //----------------------------------------------------
+  // INITIALIZE THE PERIPHERALS & SET DIRECTIONS OF GPIO
+  //----------------------------------------------------
+  // Initialise LEDs
+  status = XGpio_Initialize(&LEDInst, LEDS_DEVICE_ID);
+  if(status != XST_SUCCESS) return XST_FAILURE;
+
+  // Initialise Push Buttons
+  status = XGpio_Initialize(&BTNInst, BTNS_DEVICE_ID);
+  if(status != XST_SUCCESS) return XST_FAILURE;
+
+  // Initialize Switches
+  status = XGpio_Initialize(&SWTInst, SWTS_DEVICE_ID);
+  if(status != XST_SUCCESS) return XST_FAILURE;
+
+  // Set LEDs direction to outputs
+  XGpio_SetDataDirection(&LEDInst, 1, 0x00);
+
+  // Set all buttons direction to inputs
+  XGpio_SetDataDirection(&BTNInst, 1, 0xFF);
+
+  // Set Switch directions to inputs
+  XGpio_SetDataDirection(&SWTInst, 1, 0xFF);
+
+
+  //----------------------------------------------------
+  // SETUP THE TIMER
+  //----------------------------------------------------
+  status = XTmrCtr_Initialize(&TMRInst, TMR_DEVICE_ID);
+  if(status != XST_SUCCESS) return XST_FAILURE;
+  XTmrCtr_SetHandler(&TMRInst, TMR_Intr_Handler, &TMRInst);
+  XTmrCtr_SetResetValue(&TMRInst, 0, TMR_LOAD);
+  XTmrCtr_SetOptions(&TMRInst, 0, XTC_INT_MODE_OPTION | XTC_AUTO_RELOAD_OPTION);
+
+
+  // Initialize interrupt controller
+  status = IntcInitFunction(INTC_DEVICE_ID, &TMRInst, &BTNInst);
+  if(status != XST_SUCCESS) return XST_FAILURE;
+
+  XTmrCtr_Start(&TMRInst, 0);
+
+  while(1)
+  {
+	  /* Interrupt Enable and Disables */
+	  if(XGpio_DiscreteRead(&SWTInst, 1) == 0b1000)
+	  {
+		  XGpio_InterruptDisable(&BTNInst, BTN_INT);
+	  }
+	  else if((XGpio_DiscreteRead(&BTNInst, 1) > 0b1000) || (XGpio_DiscreteRead(&SWTInst, 1) != 0b0000))
+	  {
+		  XTmrCtr_Stop(&TMRInst, 0);
+		  XGpio_DiscreteWrite(&LEDInst, 1, 15);
+		  for(int i = 0; i < LED_DELAY; i++);
+		  XGpio_DiscreteWrite(&LEDInst, 1, 0);
+		  for(int i = 0; i < LED_DELAY; i++);
+		  if((XGpio_DiscreteRead(&BTNInst, 1) == 0b1000) && (XGpio_DiscreteRead(&SWTInst, 1) != 0b0000))
+		  {
+			  XTmrCtr_Start(&TMRInst, 0);
+		  }
+		  else if((XGpio_DiscreteRead(&BTNInst, 1) == 0b0000) && (XGpio_DiscreteRead(&SWTInst, 1) != 0b0000))
+		  {
+			  XTmrCtr_Start(&TMRInst, 0);
+		  }
+	  }
+	  else if(XGpio_DiscreteRead(&SWTInst, 1) == 0)
+		  XGpio_InterruptEnable(&BTNInst, BTN_INT);
+	  else if((XGpio_DiscreteRead(&SWTInst, 1) == 0b0001) && (XGpio_DiscreteRead(&BTNInst, 1) == 0b0001))
+	  {
+		  // Push button 0 (BTN0) increments the current number of times the AXI Timer
+		  // will interrupt the process before it increments the count autonomously
+		  // (originally set to 3 interrupts) with a maximum count of 7 interrupts.
+		  // Slide switch 0 (SW0) must be ON for BTN0 to be an effective interrupt.
+		  // The current incremented number of times are to be displayed in the LEDs
+		  // for 2 seconds. The LEDs then return to the displaying the current count.
+
+		  XGpio_InterruptDisable(&BTNInst, BTN_INT);
+		  if(tmr_limit == 7)
+			  tmr_limit = 3;
+		  else
+			  tmr_limit++;
+
+		  XTmrCtr_Stop(&TMRInst, 0);
+		  XGpio_InterruptEnable(&BTNInst, BTN_INT);
+		  XGpio_DiscreteWrite(&LEDInst, 1, tmr_limit);
+		  for(int i = 0; i < LED_DELAY * 20; i++);
+		  XTmrCtr_Start(&TMRInst, 0);
+	  }
+	  else if((XGpio_DiscreteRead(&SWTInst, 1) == 0b0010) && (XGpio_DiscreteRead(&BTNInst, 1) == 0b0010))
+	  {
+		  // Push button 1 (BTN1) decrements the current number of times the AXI
+		  // Timer will interrupt the process before it increments the count
+		  // autonomously (originally set to 3 interrupts) with a minimum count
+		  // of 1 interrupt. Slide switch 1 (SW1) must be ON for BTN1 to be effective.
+		  // The current decremented number of times are to be displayed in the LEDs
+		  // for 2 seconds. The LEDs then return to the displaying the current count.
+		  XGpio_InterruptDisable(&BTNInst, BTN_INT);
+		  if(tmr_limit == 1)
+			  tmr_limit = 3;
+		  else
+			  tmr_limit--;
+
+		  XTmrCtr_Stop(&TMRInst, 0);
+		  XGpio_InterruptEnable(&BTNInst, BTN_INT);
+		  XGpio_DiscreteWrite(&LEDInst, 1, tmr_limit);
+		  for(int i = 0; i < LED_DELAY * 20; i++);
+		  XTmrCtr_Start(&TMRInst, 0);
+	  }
+	  else if((XGpio_DiscreteRead(&SWTInst, 1) == 0b0100) && (XGpio_DiscreteRead(&BTNInst, 1) == 0))
+	  {
+		  // Slide switch 2 (SW2) ON changes the project operation from BTN0 and BTN1
+		  // to BTN2 and BTN3. That is, if SW2 is ON, BTN2 increments and BTN3 decrements
+		  // the current number of times the AXI Timer will interrupt the process with
+		  // the limits and operation of the LEDs as described in Tasks 3 and 4. If SW2
+		  // is OFF, the process reverts so that BTN1 increments and BTN2 decrements
+		  // the current number of times the AXI Timer will interrupt the process as in Tasks 3 and 4.
+	  }
+	  else
+	  {
+		  XTmrCtr_Stop(&TMRInst, 0);
+		  XGpio_DiscreteWrite(&LEDInst, 1, 0xFF);
+		  for(int i = 0; i < LED_DELAY * 10; i++);
+		  XGpio_DiscreteWrite(&LEDInst, 1, 0x00);
+		  for(int i = 0; i < LED_DELAY * 10; i++);
+		  if((XGpio_DiscreteRead(&SWTInst, 1) != 8) || (XGpio_DiscreteRead(&BTNInst, 1) == 0))
+		  {
+			  led_data = 0;
+			  XTmrCtr_Start(&TMRInst, 0);
+		  }
+	  }
+  }
+
+  return 0;
+}
+
+//----------------------------------------------------
+// INITIAL SETUP FUNCTIONS
+//----------------------------------------------------
+
+int InterruptSystemSetup(XScuGic *XScuGicInstancePtr)
+{
+	// Enable interrupt
+	XGpio_InterruptEnable(&BTNInst, BTN_INT);
+	XGpio_InterruptGlobalEnable(&BTNInst);
+
+	Xil_ExceptionRegisterHandler(XIL_EXCEPTION_ID_INT,
+			 	 	 	 	 	 (Xil_ExceptionHandler)XScuGic_InterruptHandler,
+			 	 	 	 	 	 XScuGicInstancePtr);
+	Xil_ExceptionEnable();
+
+
+	return XST_SUCCESS;
+
+}
+
+int IntcInitFunction(u16 DeviceId, XTmrCtr *TmrInstancePtr, XGpio *GpioInstancePtr)
+{
+	XScuGic_Config *IntcConfig;
+	int status;
+
+	// Interrupt controller initialisation
+	IntcConfig = XScuGic_LookupConfig(DeviceId);
+	status = XScuGic_CfgInitialize(&INTCInst, IntcConfig, IntcConfig->CpuBaseAddress);
+	if(status != XST_SUCCESS) return XST_FAILURE;
+
+	// Call to interrupt setup
+	status = InterruptSystemSetup(&INTCInst);
+	if(status != XST_SUCCESS) return XST_FAILURE;
+
+	// Connect GPIO interrupt to handler
+	status = XScuGic_Connect(&INTCInst,
+					  	  	 INTC_GPIO_INTERRUPT_ID,
+					  	  	 (Xil_ExceptionHandler)BTN_Intr_Handler,
+					  	  	 (void *)GpioInstancePtr);
+	if(status != XST_SUCCESS) return XST_FAILURE;
+
+
+	// Connect timer interrupt to handler
+	status = XScuGic_Connect(&INTCInst,
+							 INTC_TMR_INTERRUPT_ID,
+							 (Xil_ExceptionHandler)TMR_Intr_Handler,
+							 (void *)TmrInstancePtr);
+	if(status != XST_SUCCESS) return XST_FAILURE;
+
+	// Enable GPIO interrupts interrupt
+	XGpio_InterruptEnable(GpioInstancePtr, 1);
+	XGpio_InterruptGlobalEnable(GpioInstancePtr);
+
+	// Enable GPIO and timer interrupts in the controller
+	XScuGic_Enable(&INTCInst, INTC_GPIO_INTERRUPT_ID);
+
+	XScuGic_Enable(&INTCInst, INTC_TMR_INTERRUPT_ID);
+
+
+	return XST_SUCCESS;
+}
+
